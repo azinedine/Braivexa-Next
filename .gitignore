@@ -71,4 +71,7 @@ app-example
 
 # Local DB files (specific to your setup)
 local.db/
-
+# Ignore PGLite files
+/tmp/pglite/
+*.db
+postmaster.pid
