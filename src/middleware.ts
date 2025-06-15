@@ -1,6 +1,5 @@
 import type { NextFetchEvent, NextRequest } from 'next/server';
 import { detectBot } from '@arcjet/next';
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import createMiddleware from 'next-intl/middleware';
 import { NextResponse } from 'next/server';
 import arcjet from '@/libs/Arcjet';
@@ -8,17 +7,13 @@ import { routing } from './libs/I18nRouting';
 
 const handleI18nRouting = createMiddleware(routing);
 
-const isProtectedRoute = createRouteMatcher([
-  '/dashboard(.*)',
-  '/:locale/dashboard(.*)',
-]);
+const isProtectedRoute = (pathname: string): boolean => {
+  return pathname.startsWith('/dashboard');
+};
 
-const isAuthPage = createRouteMatcher([
-  '/sign-in(.*)',
-  '/:locale/sign-in(.*)',
-  '/sign-up(.*)',
-  '/:locale/sign-up(.*)',
-]);
+const isAuthPage = (pathname: string): boolean => {
+  return pathname.startsWith('/login') || pathname.startsWith('/register');
+};
 
 // Improve security with Arcjet
 const aj = arcjet.withRule(
@@ -36,10 +31,9 @@ const aj = arcjet.withRule(
 
 export default async function middleware(
   request: NextRequest,
-  event: NextFetchEvent,
+  _event: NextFetchEvent,
 ) {
   // Verify the request with Arcjet
-  // Use `process.env` instead of Env to reduce bundle size in middleware
   if (process.env.ARCJET_KEY) {
     const decision = await aj.protect(request);
 
@@ -48,25 +42,33 @@ export default async function middleware(
     }
   }
 
-  // Clerk keyless mode doesn't work with i18n, this is why we need to run the middleware conditionally
-  if (
-    isAuthPage(request) || isProtectedRoute(request)
-  ) {
-    return clerkMiddleware(async (auth, req) => {
-      if (isProtectedRoute(req)) {
-        const locale = req.nextUrl.pathname.match(/(\/.*)\/dashboard/)?.at(1) ?? '';
+  const pathname = request.nextUrl.pathname;
+  const token = request.cookies.get('auth-token')?.value;
 
-        const signInUrl = new URL(`${locale}/sign-in`, req.url);
-
-        await auth.protect({
-          unauthenticatedUrl: signInUrl.toString(),
-        });
-      }
-
-      return handleI18nRouting(request);
-    })(request, event);
+  // If it's an auth page and user is already authenticated, redirect to dashboard
+  if (isAuthPage(pathname) && token) {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
+  // If it's a protected route and user is not authenticated, redirect to login
+  if (isProtectedRoute(pathname) && !token) {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
+  // Add the token to the request headers if it exists
+  if (token) {
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set('Authorization', `Bearer ${token}`);
+
+    const response = NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+
+    return response;
+  }
+  // Handle i18n routing for all other cases
   return handleI18nRouting(request);
 }
 
